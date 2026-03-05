@@ -70,8 +70,13 @@ export default function DashboardClient() {
         // Fetch Logs
         const logsRes = await fetch(`${API_BASE_URL}/logs`);
         if (logsRes.ok) {
-          const logsData: string[] = await logsRes.json();
-          setLogs(logsData || []);
+          const logsData = await logsRes.json();
+          if (Array.isArray(logsData)) {
+            setLogs(logsData);
+          } else {
+            console.error('API response for logs is not an array:', logsData);
+            setLogs([]); // Ensure logs is always an array to prevent crash
+          }
         } else {
           console.error('Failed to fetch logs');
         }
