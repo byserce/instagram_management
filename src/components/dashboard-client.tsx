@@ -16,13 +16,8 @@ import { ScrollArea } from '@/components/ui/scroll-area'
 import { useToast } from '@/hooks/use-toast'
 import type { BotStatus, Post } from '@/lib/types'
 import { Play, Loader2, Check, X, FileText, Image as ImageIcon, AlertTriangle } from 'lucide-react'
-import { PlaceHolderImages } from '@/lib/placeholder-images'
 
-// Mock data and functions to simulate the API
-const MOCK_POST: Post = {
-  text: '🚀 Exploring the future of AI in 2024! From generative models to ethical considerations, this year is proving to be a landmark for artificial intelligence. What are your thoughts? #AI #TechTrends #Innovation2024',
-  imageUrl: PlaceHolderImages.find(p => p.id === 'post-preview')?.imageUrl || 'https://picsum.photos/seed/trendpilot/1080/1080',
-}
+const API_BASE_URL = 'http://127.0.0.1:8000';
 
 const getStatusColor = (status: BotStatus) => {
   switch (status) {
@@ -42,99 +37,181 @@ const getStatusColor = (status: BotStatus) => {
 
 export default function DashboardClient() {
   const [status, setStatus] = useState<BotStatus>('IDLE')
-  const [logs, setLogs] = useState<string[]>([`[${new Date().toLocaleTimeString()}] Dashboard initialized.`])
+  const [logs, setLogs] = useState<string[]>([])
   const [post, setPost] = useState<Post | null>(null)
   const [isLoading, setIsLoading] = useState({
     start: false,
     approveTrend: false,
+    rejectTrend: false,
     approvePost: false,
     rejectPost: false,
   })
   const { toast } = useToast()
   const logsEndRef = useRef<HTMLDivElement>(null)
 
-  const addLog = (message: string) => {
-    setLogs(prev => [...prev, `[${new Date().toLocaleTimeString()}] ${message}`])
-  }
-
   useEffect(() => {
     logsEndRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [logs])
 
-  // Simulate status and log polling
+  // Poll for status and logs from the backend
   useEffect(() => {
-    let statusInterval: NodeJS.Timeout
-    if (status === 'RUNNING') {
-      statusInterval = setInterval(() => {
-        addLog('Searching for new trends...')
-      }, 5000)
-    }
-    return () => clearInterval(statusInterval)
-  }, [status])
+    const fetchStatusAndLogs = async () => {
+      try {
+        // Fetch Status
+        const statusRes = await fetch(`${API_BASE_URL}/status`);
+        if (statusRes.ok) {
+          const statusData: { status: BotStatus } = await statusRes.json();
+          setStatus(statusData.status || 'UNKNOWN');
+        } else {
+          // Don't throw, just log, to prevent UI freeze on transient network errors
+          console.error('Failed to fetch status');
+        }
 
-  const handleStartBot = () => {
+        // Fetch Logs
+        const logsRes = await fetch(`${API_BASE_URL}/logs`);
+        if (logsRes.ok) {
+          const logsData: string[] = await logsRes.json();
+          setLogs(logsData || []);
+        } else {
+          console.error('Failed to fetch logs');
+        }
+      } catch (error) {
+        console.error("Polling error:", error);
+        setStatus('ERROR'); // If we can't poll at all, server is likely down
+      }
+    };
+
+    const intervalId = setInterval(fetchStatusAndLogs, 2000);
+    fetchStatusAndLogs(); // Initial fetch
+
+    return () => clearInterval(intervalId); // Cleanup on unmount
+  }, []);
+
+  // Fetch post content when the bot is waiting for post approval
+  useEffect(() => {
+    const fetchPost = async () => {
+      if (status === 'WAITING_POST_APPROVAL' && !post) {
+        try {
+          const response = await fetch(`${API_BASE_URL}/current-post`);
+          if (!response.ok) {
+            throw new Error('Failed to fetch post preview.');
+          }
+          const data: Post = await response.json();
+          setPost(data);
+          toast({ title: '📝 Post Ready for Review' });
+        } catch (error) {
+          console.error(error);
+          const errorMessage = error instanceof Error ? error.message : 'An unknown error occurred';
+          toast({ title: 'API Error', description: errorMessage, variant: 'destructive' });
+          setStatus('ERROR');
+        }
+      }
+    };
+    fetchPost();
+  }, [status, post, toast]);
+
+  const handleStartBot = async () => {
     setIsLoading(prev => ({ ...prev, start: true }))
-    setStatus('STARTING')
-    addLog('Bot start command issued...')
-    toast({ title: '🚀 Bot Starting' })
-
-    setTimeout(() => {
-      setStatus('RUNNING')
+    toast({ title: '🚀 Sending start command...' })
+    try {
+      const response = await fetch(`${API_BASE_URL}/start`, { method: 'POST' });
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({ detail: 'Failed to start bot' }));
+        throw new Error(errorData.detail);
+      }
+      toast({ title: '✅ Bot Start Command Sent' });
+    } catch (error) {
+      console.error(error);
+      const errorMessage = error instanceof Error ? error.message : 'An unknown error occurred';
+      toast({ title: 'API Error', description: errorMessage, variant: 'destructive' });
+      setStatus('ERROR');
+    } finally {
       setIsLoading(prev => ({ ...prev, start: false }))
-      addLog('Bot is now running and monitoring for trends.')
-      toast({ title: '✅ Bot Started Successfully' })
-
-      setTimeout(() => {
-        setStatus('WAITING_TREND_APPROVAL')
-        addLog("🔥 New trend found: 'AI in 2024'. Waiting for approval.")
-      }, 7000)
-    }, 2000)
+    }
   }
 
-  const handleApproveTrend = () => {
+  const handleApproveTrend = async () => {
     setIsLoading(prev => ({ ...prev, approveTrend: true }))
-    setStatus('APPROVING_TREND')
-    addLog('Trend approved. Generating post content...')
-    toast({ title: '👍 Trend Approved' })
-
-    setTimeout(() => {
-      setStatus('GENERATING_POST')
-      setTimeout(() => {
-        setPost(MOCK_POST)
-        setStatus('WAITING_POST_APPROVAL')
-        addLog('📝 Post generated. Waiting for final post approval.')
-        setIsLoading(prev => ({ ...prev, approveTrend: false }))
-      }, 3000)
-    }, 1500)
+    toast({ title: '👍 Approving Trend...' })
+    try {
+      const response = await fetch(`${API_BASE_URL}/approve-trend`, { method: 'POST' });
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({ detail: 'Failed to approve trend' }));
+        throw new Error(errorData.detail);
+      }
+      toast({ title: '✅ Trend Approved' });
+    } catch (error) {
+        console.error(error);
+        const errorMessage = error instanceof Error ? error.message : 'An unknown error occurred';
+        toast({ title: 'API Error', description: errorMessage, variant: 'destructive' });
+        setStatus('ERROR');
+    } finally {
+      setIsLoading(prev => ({ ...prev, approveTrend: false }))
+    }
   }
 
-  const handleApprovePost = () => {
+  const handleRejectTrend = async () => {
+    setIsLoading(prev => ({ ...prev, rejectTrend: true }));
+    toast({ title: '👎 Rejecting Trend...', variant: 'destructive' });
+    try {
+      // NOTE: Assumed endpoint
+      const response = await fetch(`${API_BASE_URL}/reject-trend`, { method: 'POST' });
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({ detail: 'Failed to reject trend' }));
+        throw new Error(errorData.detail);
+      }
+      toast({ title: '🗑️ Trend Rejected' });
+    } catch (error) {
+        console.error(error);
+        const errorMessage = error instanceof Error ? error.message : 'An unknown error occurred';
+        toast({ title: 'API Error', description: errorMessage, variant: 'destructive' });
+        setStatus('ERROR');
+    } finally {
+      setIsLoading(prev => ({ ...prev, rejectTrend: false }));
+    }
+  };
+
+  const handleApprovePost = async () => {
     setIsLoading(prev => ({ ...prev, approvePost: true }))
-    setStatus('APPROVING_POST')
-    addLog('Post approved. Publishing to social channels...')
-    toast({ title: '🎉 Post Approved & Publishing' })
-
-    setTimeout(() => {
+    toast({ title: '🎉 Publishing Post...' })
+    try {
+      const response = await fetch(`${API_BASE_URL}/approve-post`, { method: 'POST' });
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({ detail: 'Failed to approve post' }));
+        throw new Error(errorData.detail);
+      }
       setPost(null)
-      setStatus('RUNNING')
+      toast({ title: '✅ Post Published!' })
+    } catch (error) {
+        console.error(error);
+        const errorMessage = error instanceof Error ? error.message : 'An unknown error occurred';
+        toast({ title: 'API Error', description: errorMessage, variant: 'destructive' });
+        setStatus('ERROR');
+    } finally {
       setIsLoading(prev => ({ ...prev, approvePost: false }))
-      addLog('Post published successfully. Returning to trend monitoring.')
-      toast({ title: '✅ Post Published' })
-    }, 2500)
+    }
   }
 
-  const handleRejectPost = () => {
+  const handleRejectPost = async () => {
     setIsLoading(prev => ({ ...prev, rejectPost: true }))
-    setStatus('REJECTING_POST')
-    addLog('Post rejected by user. Discarding post and returning to monitoring.')
-    toast({ title: '🗑️ Post Rejected', variant: 'destructive' })
-
-    setTimeout(() => {
+    toast({ title: '🗑️ Rejecting Post...', variant: 'destructive' })
+    try {
+      // NOTE: Assumed endpoint
+      const response = await fetch(`${API_BASE_URL}/reject-post`, { method: 'POST' });
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({ detail: 'Failed to reject post' }));
+        throw new Error(errorData.detail);
+      }
       setPost(null)
-      setStatus('RUNNING')
+      toast({ title: '🗑️ Post Rejected' })
+    } catch (error) {
+        console.error(error);
+        const errorMessage = error instanceof Error ? error.message : 'An unknown error occurred';
+        toast({ title: 'API Error', description: errorMessage, variant: 'destructive' });
+        setStatus('ERROR');
+    } finally {
       setIsLoading(prev => ({ ...prev, rejectPost: false }))
-      addLog('Resuming trend monitoring.')
-    }, 2000)
+    }
   }
 
   return (
@@ -185,16 +262,12 @@ export default function DashboardClient() {
             <p className="text-lg font-semibold">Trend: "AI in 2024"</p>
           </CardContent>
           <CardFooter className="gap-4">
-            <Button onClick={handleApproveTrend} disabled={isLoading.approveTrend}>
+            <Button onClick={handleApproveTrend} disabled={isLoading.approveTrend || isLoading.rejectTrend}>
               {isLoading.approveTrend ? <Loader2 className="animate-spin" /> : <Check />}
               Approve Trend
             </Button>
-            <Button variant="destructive" onClick={() => {
-              setStatus('IDLE');
-              addLog('Trend rejected by user.');
-              toast({ title: 'Trend Rejected', variant: 'destructive' })
-            }}>
-              <X />
+            <Button variant="destructive" onClick={handleRejectTrend} disabled={isLoading.approveTrend || isLoading.rejectTrend}>
+              {isLoading.rejectTrend ? <Loader2 className="animate-spin" /> : <X />}
               Reject
             </Button>
           </CardFooter>
@@ -211,7 +284,7 @@ export default function DashboardClient() {
             <div className="space-y-4">
               <h3 className="flex items-center gap-2 font-semibold"><ImageIcon /> Image Preview</h3>
               <div className="relative aspect-square w-full max-w-md overflow-hidden rounded-lg border">
-                <Image src={post.imageUrl} alt="Post Preview" fill className="object-cover" data-ai-hint="social media post" />
+                <Image src={post.imageUrl} alt="Post Preview" fill className="object-cover" />
               </div>
             </div>
             <div className="space-y-4">
@@ -238,7 +311,7 @@ export default function DashboardClient() {
         <Card className="lg:col-span-full border-red-500/50 bg-red-900/20">
             <CardHeader>
                 <CardTitle className="flex items-center gap-2 text-red-400"><AlertTriangle /> Error State</CardTitle>
-                <CardDescription className="text-red-400/80">The bot has encountered an error. Check the logs for more details.</CardDescription>
+                <CardDescription className="text-red-400/80">The bot has encountered an error or the backend is unreachable. Check the logs for more details.</CardDescription>
             </CardHeader>
             <CardFooter>
                 <Button onClick={() => setStatus('IDLE')}>
