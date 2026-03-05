@@ -35,10 +35,34 @@ const getStatusColor = (status: BotStatus) => {
   }
 }
 
+const mapBackendStatus = (backendStatus?: string): BotStatus => {
+  if (!backendStatus) return 'UNKNOWN';
+
+  switch (backendStatus) {
+    case 'TREND_ONAYI_BEKLENIYOR':
+      return 'WAITING_TREND_APPROVAL';
+    case 'POST_ONAYI_BEKLENIYOR':
+      return 'WAITING_POST_APPROVAL';
+    // Fallback for states that are already in the correct format
+    default:
+      const allStatuses: string[] = [
+        'IDLE', 'STARTING', 'RUNNING', 'APPROVING_TREND', 'GENERATING_POST', 
+        'APPROVING_POST', 'REJECTING_POST', 'ERROR', 'UNKNOWN'
+      ];
+      if (allStatuses.includes(backendStatus)) {
+        return backendStatus as BotStatus;
+      }
+      console.warn(`Unknown backend status: ${backendStatus}`);
+      return 'UNKNOWN';
+  }
+}
+
+
 export default function DashboardClient() {
   const [status, setStatus] = useState<BotStatus>('IDLE')
   const [logs, setLogs] = useState<string[]>([])
   const [post, setPost] = useState<Post | null>(null)
+  const [trend, setTrend] = useState<string | null>(null)
   const [isLoading, setIsLoading] = useState({
     start: false,
     approveTrend: false,
@@ -60,8 +84,8 @@ export default function DashboardClient() {
         // Fetch Status
         const statusRes = await fetch(`${API_BASE_URL}/status`);
         if (statusRes.ok) {
-          const statusData: { status: BotStatus } = await statusRes.json();
-          setStatus(statusData.status || 'UNKNOWN');
+          const statusData: { state: string } = await statusRes.json();
+          setStatus(mapBackendStatus(statusData.state));
         } else {
           // Don't throw, just log, to prevent UI freeze on transient network errors
           console.error('Failed to fetch status');
@@ -70,11 +94,11 @@ export default function DashboardClient() {
         // Fetch Logs
         const logsRes = await fetch(`${API_BASE_URL}/logs`);
         if (logsRes.ok) {
-          const logsData = await logsRes.json();
-          if (Array.isArray(logsData)) {
-            setLogs(logsData);
+          const logsData: { logs: string[] } = await logsRes.json();
+          if (logsData && Array.isArray(logsData.logs)) {
+            setLogs(logsData.logs);
           } else {
-            console.error('API response for logs is not an array:', logsData);
+            console.error('API response for logs is not in the expected format:', logsData);
             setLogs([]); // Ensure logs is always an array to prevent crash
           }
         } else {
@@ -92,6 +116,31 @@ export default function DashboardClient() {
     return () => clearInterval(intervalId); // Cleanup on unmount
   }, []);
 
+  // Fetch trend when bot is waiting for trend approval
+  useEffect(() => {
+    const fetchTrend = async () => {
+      if (status === 'WAITING_TREND_APPROVAL' && !trend) {
+        try {
+          const response = await fetch(`${API_BASE_URL}/current-trend`);
+          if (!response.ok) {
+            throw new Error('Failed to fetch trend.');
+          }
+          const data: { selected_trend: string } = await response.json();
+          setTrend(data.selected_trend);
+          toast({ title: '📈 New Trend Identified' });
+        } catch (error) {
+          console.error(error);
+          const errorMessage = error instanceof Error ? error.message : 'An unknown error occurred';
+          toast({ title: 'API Error', description: errorMessage, variant: 'destructive' });
+          setStatus('ERROR');
+        }
+      } else if (status !== 'WAITING_TREND_APPROVAL') {
+        setTrend(null)
+      }
+    };
+    fetchTrend();
+  }, [status, trend, toast]);
+
   // Fetch post content when the bot is waiting for post approval
   useEffect(() => {
     const fetchPost = async () => {
@@ -101,8 +150,8 @@ export default function DashboardClient() {
           if (!response.ok) {
             throw new Error('Failed to fetch post preview.');
           }
-          const data: Post = await response.json();
-          setPost(data);
+          const data: { caption: string; image_url: string } = await response.json();
+          setPost({ text: data.caption, imageUrl: data.image_url });
           toast({ title: '📝 Post Ready for Review' });
         } catch (error) {
           console.error(error);
@@ -110,6 +159,8 @@ export default function DashboardClient() {
           toast({ title: 'API Error', description: errorMessage, variant: 'destructive' });
           setStatus('ERROR');
         }
+      } else if (status !== 'WAITING_POST_APPROVAL') {
+        setPost(null)
       }
     };
     fetchPost();
@@ -264,7 +315,11 @@ export default function DashboardClient() {
             <CardDescription>The bot has identified a new trend and requires your approval to proceed.</CardDescription>
           </CardHeader>
           <CardContent>
-            <p className="text-lg font-semibold">Trend: "AI in 2024"</p>
+            {trend ? 
+              <p className="text-lg font-semibold">Trend: "{trend}"</p>
+              :
+              <p className="text-lg font-semibold">Loading trend...</p>
+            }
           </CardContent>
           <CardFooter className="gap-4">
             <Button onClick={handleApproveTrend} disabled={isLoading.approveTrend || isLoading.rejectTrend}>
