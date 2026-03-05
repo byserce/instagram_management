@@ -22,6 +22,8 @@ const API_BASE_URL = 'http://127.0.0.1:8000';
 const getStatusColor = (status: BotStatus) => {
   switch (status) {
     case 'RUNNING':
+    case 'GENERATING_POST':
+    case 'APPROVING_POST':
       return 'bg-green-500/20 text-green-400 border-green-500/30'
     case 'IDLE':
       return 'bg-gray-500/20 text-gray-400 border-gray-500/30'
@@ -39,17 +41,29 @@ const mapBackendStatus = (backendStatus?: string): BotStatus => {
   if (!backendStatus) return 'UNKNOWN';
 
   switch (backendStatus) {
+    case 'BOŞTA':
+    case 'BEKLEME_MODU':
+      return 'IDLE';
+    case 'TRENDLER_ARANIYOR':
+    case 'HABER_DETAYI_CEKILIYOR':
+      return 'RUNNING';
+    case 'ICERIK_URETILIYOR':
+      return 'GENERATING_POST';
+    case 'PAYLASILIYOR':
+      return 'APPROVING_POST';
     case 'TREND_ONAYI_BEKLENIYOR':
       return 'WAITING_TREND_APPROVAL';
     case 'POST_ONAYI_BEKLENIYOR':
       return 'WAITING_POST_APPROVAL';
-    // Fallback for states that are already in the correct format
+    case 'HATA':
+      return 'ERROR';
+    // Fallback for states that might already be in the correct English format
     default:
-      const allStatuses: string[] = [
-        'IDLE', 'STARTING', 'RUNNING', 'APPROVING_TREND', 'GENERATING_POST', 
-        'APPROVING_POST', 'REJECTING_POST', 'ERROR', 'UNKNOWN'
+      const allStatuses: BotStatus[] = [
+        'IDLE', 'STARTING', 'RUNNING', 'WAITING_TREND_APPROVAL', 'APPROVING_TREND', 
+        'GENERATING_POST', 'WAITING_POST_APPROVAL', 'APPROVING_POST', 'REJECTING_POST', 'ERROR', 'UNKNOWN'
       ];
-      if (allStatuses.includes(backendStatus)) {
+      if (allStatuses.includes(backendStatus as BotStatus)) {
         return backendStatus as BotStatus;
       }
       console.warn(`Unknown backend status: ${backendStatus}`);
